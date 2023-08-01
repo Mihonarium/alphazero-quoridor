@@ -27,7 +27,8 @@ args = dotdict({
     'epochs': 4,
     'batch_size': 64,
     'cuda': torch.cuda.is_available(),
-    'num_channels': 512,
+    'num_channels': 256,
+    'clip': 1.0,
 })
 
 class NNetWrapper(NeuralNet):
@@ -43,7 +44,9 @@ class NNetWrapper(NeuralNet):
         """
         examples: list of examples, each example is of form (board, pi, v)
         """
+        # wandb.init(project="quoridor alphazero", config=config_dict, mode="disabled" if IS_CI else "run")
         optimizer = optim.Adam(self.nnet.parameters())
+        start_time = time.time()
 
         for epoch in range(args.epochs):
             print('EPOCH ::: ' + str(epoch+1))
@@ -76,7 +79,7 @@ class NNetWrapper(NeuralNet):
                 out_pi, out_v = self.nnet(boards)
                 l_pi = self.loss_pi(target_pis, out_pi)
                 l_v = self.loss_v(target_vs, out_v)
-                total_loss = l_pi + l_v
+                total_loss = l_pi * 0.02 + l_v
 
                 # record loss
                 #pi_losses.update(l_pi.data[0], boards.size(0))
@@ -87,6 +90,7 @@ class NNetWrapper(NeuralNet):
                 # compute gradient and do SGD step
                 optimizer.zero_grad()
                 total_loss.backward()
+                torch.nn.utils.clip_grad_norm_(self.nnet.parameters(), args.clip)
                 optimizer.step()
 
                 # measure elapsed time
@@ -151,5 +155,7 @@ class NNetWrapper(NeuralNet):
         filepath = os.path.join(folder, filename)
         if not os.path.exists(filepath):
             raise("No model in path {}".format(filepath))
-        checkpoint = torch.load(filepath)
+        checkpoint = torch.load(filepath, map_location='cpu')
+        self.nnet = self.nnet.to('cpu')
         self.nnet.load_state_dict(checkpoint['state_dict'])
+        self.nnet.cuda()
