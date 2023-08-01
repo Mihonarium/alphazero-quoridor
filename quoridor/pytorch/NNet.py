@@ -11,7 +11,6 @@ from utils import *
 from pytorch_classification.utils import Bar, AverageMeter
 from NeuralNet import NeuralNet
 
-import argparse
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -24,18 +23,21 @@ from .QuoridorNNet import QuoridorNNet as qnnet
 args = dotdict({
     'lr': 0.001,
     'dropout': 0.3,
-    'epochs': 4,
+    'epochs': 2,
     'batch_size': 64,
     'cuda': torch.cuda.is_available(),
-    'num_channels': 512,
+    'num_channels': 256,
 })
 
 class NNetWrapper(NeuralNet):
     def __init__(self, game):
-        self.nnet = qnnet(game, args)
+        # self.nnet = qnnet(game, args)
         self.board_x, self.board_y = game.getBoardSize()
         self.action_size = game.getActionSize()
-
+        self.game = game
+    
+    def init_model(self):
+        self.nnet = qnnet(self.game, args)
         if args.cuda:
             self.nnet.cuda()
 
@@ -43,7 +45,9 @@ class NNetWrapper(NeuralNet):
         """
         examples: list of examples, each example is of form (board, pi, v)
         """
+        # wandb.init(project="quoridor alphazero", config=config_dict, mode="disabled" if IS_CI else "run")
         optimizer = optim.Adam(self.nnet.parameters())
+        start_time = time.time()
 
         for epoch in range(args.epochs):
             print('EPOCH ::: ' + str(epoch+1))
@@ -151,5 +155,7 @@ class NNetWrapper(NeuralNet):
         filepath = os.path.join(folder, filename)
         if not os.path.exists(filepath):
             raise("No model in path {}".format(filepath))
-        checkpoint = torch.load(filepath)
+        checkpoint = torch.load(filepath, map_location='cpu')
+        self.nnet = self.nnet.to('cpu')
         self.nnet.load_state_dict(checkpoint['state_dict'])
+        self.nnet.cuda()
