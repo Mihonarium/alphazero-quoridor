@@ -189,10 +189,10 @@ class SelfAttention(nn.Module):
                          "batch (h w) ch -> batch ch h w", h=H, w=W)
 
 class AttentionBlock(nn.Module):
-    def __init__(self, channels: int):
+    def __init__(self, channels: int, num_heads: int = 4):
         super().__init__()
         self.group_norm = GroupNorm(1, channels)
-        self.attention = SelfAttention(channels)
+        self.attention = SelfAttention(channels, num_heads)
 
     def forward(self, x: t.Tensor) -> t.Tensor:
         y = self.group_norm(x)
@@ -200,9 +200,9 @@ class AttentionBlock(nn.Module):
         return x + y
     
 class AttnWithLinearBlock(nn.Module):
-    def __init__(self, channels: int):
+    def __init__(self, channels: int, num_heads: int = 4):
         super().__init__()
-        self.attn_block = AttentionBlock(channels)
+        self.attn_block = AttentionBlock(channels, num_heads)
         self.linear1 = nn.Linear(channels, channels)
         self.silu = SiLU()
         self.linear2 = nn.Linear(channels, channels)
@@ -290,19 +290,6 @@ class DownBlock(nn.Module):
         return final_conv_result, attn_result
     
     
-    
-class MidBlock(nn.Module):
-    def __init__(self, mid_dim: int, time_emb_dim: int, groups: int):
-        super().__init__()
-        self.res_block1 = ResidualBlock(mid_dim, mid_dim, time_emb_dim, groups)
-        self.attention_block = AttentionBlock(mid_dim)
-        self.res_block2 = ResidualBlock(mid_dim, mid_dim, time_emb_dim, groups)
-
-    def forward(self, x: t.Tensor, step_emb: t.Tensor):
-        res1_result = self.res_block1(x, step_emb)
-        attn_result = self.attention_block(res1_result)
-        res2_result = self.res_block1(attn_result, step_emb)
-        return res2_result
 
 class QuoridorNNet(nn.Module):
     def __init__(self, game, args):
@@ -323,23 +310,25 @@ class QuoridorNNet(nn.Module):
         dim_mults = (1, 2, 4, 8)
         groups = 4        
         time_emb_dim = 4
+        num_heads = 4
         self.time_embedding = t.zeros(time_emb_dim)
         self.pos_emb = SinusoidalPositionEmbeddings2D(args.num_channels, 4, self.board_x, self.board_y)
         channels = args.num_channels
         self.initial_conv = nn.Conv2d(4, channels, 7, padding=3)
         attn_blocks = 4
         self.attn_blocks = nn.ModuleList([
-            AttnWithLinearBlock(channels) for i in range(attn_blocks)
+            AttnWithLinearBlock(channels, num_heads) for i in range(attn_blocks)
         ])
         previous_dim_mults = [1] + list(dim_mults)
         self.down_blocks = nn.ModuleList([
             DownBlock(previous_dim_mults[i] * channels, dim_mult * channels, time_emb_dim, groups, i != len(dim_mults)-1) for i, dim_mult in enumerate(dim_mults)
+            # DownBlock(previous_dim_mults[i] * channels, dim_mult * channels, time_emb_dim, groups, True) for i, dim_mult in enumerate(dim_mults)
         ])
         # self.final_conv = nn.Conv2d(dim_mults[-1] * channels, channels * 8, 4, stride=2, padding=1)
         
-        self.fc3 = nn.Linear(channels * 8, self.action_size)
+        self.fc3 = nn.Linear(channels * dim_mults[-1], self.action_size)
 
-        self.fc4 = nn.Linear(channels * 8, 1)
+        self.fc4 = nn.Linear(channels * dim_mults[-1], 1)
         
         
 
@@ -351,9 +340,11 @@ class QuoridorNNet(nn.Module):
         for block in self.attn_blocks:
             x = block(x)
         time_emb = repeat(self.time_embedding, "x -> b x", b=b)
+        # print("shape before blocks", x.shape)
         # skips = []
         for block in self.down_blocks:
             x, _ = block(x, time_emb)
+            # print(x.shape)
             # skips += [skip]
         # x = self.final_conv(x)
         x = x.squeeze(-1).squeeze(-1)
@@ -361,4 +352,3 @@ class QuoridorNNet(nn.Module):
         v = self.fc4(x)                                                                          # batch_size x 1
         
         return F.log_softmax(pi, dim=1), t.tanh(v)
-        
