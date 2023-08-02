@@ -45,6 +45,7 @@ class Coach():
         while True and episodeStep<200:
             episodeStep += 1
             canonicalBoard = self.game.getCanonicalForm(board,self.curPlayer)
+            valids = self.game.getValidMoves(canonicalBoard, 1)
             temp = int(episodeStep < self.args.tempThreshold)
 
             pi = self.mcts.getActionProb(canonicalBoard, temp=temp)
@@ -57,13 +58,13 @@ class Coach():
             #self.game.print_board(canonicalBoard)
 
             action = np.random.choice(len(pi), p=pi)
-            trainExamples.append([canonicalBoard, self.curPlayer, pi, None])
+            trainExamples.append([canonicalBoard, self.curPlayer, pi, None, valids])
             board, self.curPlayer = self.game.getNextState(board, self.curPlayer, action)
 
             r = self.game.getGameEnded(board, self.curPlayer)
 
             if r!=0:
-                return [(x[0],x[2],r*x[1]) for x in trainExamples]
+                return [(x[0],x[2],r*x[1], x[4]) for x in trainExamples]
         #return [(x[0],x[2],0) for x in trainExamples]
         return []
 
