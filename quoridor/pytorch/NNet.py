@@ -37,17 +37,20 @@ class NNetWrapper(NeuralNet):
         self.nnet = qnnet(game, args)
         self.board_x, self.board_y = game.getBoardSize()
         self.action_size = game.getActionSize()
+        self.game = game
 
         if args.cuda:
             self.nnet.cuda()
 
-    def train(self, examples):
+    def train(self, examples, withValids=True):
         """
         examples: list of examples, each example is of form (board, pi, v)
         """
         # wandb.init(project="quoridor alphazero", config=config_dict, mode="disabled" if IS_CI else "run")
         optimizer = optim.Adam(self.nnet.parameters(), lr=args.lr, weight_decay=args.weight_decay)
         start_time = time.time()
+        if len(examples[0]) < 4:
+            withValids = False
 
         for epoch in range(args.epochs):
             print('EPOCH ::: ' + str(epoch+1))
@@ -63,21 +66,31 @@ class NNetWrapper(NeuralNet):
 
             while batch_idx < int(len(examples)/args.batch_size):
                 sample_ids = np.random.randint(len(examples), size=args.batch_size)
-                boards, pis, vs = list(zip(*[examples[i] for i in sample_ids]))
+                if withValids:
+                    boards, pis, vs, valids = list(zip(*[examples[i] for i in sample_ids]))
+                else:
+                    boards, pis, vs = list(zip(*[examples[i] for i in sample_ids]))
                 boards = torch.FloatTensor(np.array(boards).astype(np.uint8))
                 target_pis = torch.FloatTensor(np.array(pis))
                 target_vs = torch.FloatTensor(np.array(vs).astype(np.float64))
+                if withValids:
+                    valids = torch.FloatTensor(np.array(valids).astype(np.uint8))
 
                 # predict
                 if args.cuda:
                     boards, target_pis, target_vs = boards.contiguous().cuda(), target_pis.contiguous().cuda(), target_vs.contiguous().cuda()
-                boards, target_pis, target_vs = Variable(boards), Variable(target_pis), Variable(target_vs)
+                    if withValids:
+                        valids = valids.contiguous().cuda()
+                boards, target_pis, target_vs, valids = Variable(boards), Variable(target_pis), Variable(target_vs), Variable(valids)
 
                 # measure data loading time
                 data_time.update(time.time() - end)
 
                 # compute output
-                out_pi, out_v = self.nnet(boards)
+                out_pi, out_v = self.nnet(boards, withValids)
+                if withValids:
+                    out_pi = out_pi * valids
+                    out_pi = F.softmax(out_pi, dim=1)
                 l_pi = self.loss_pi(target_pis, out_pi)
                 l_v = self.loss_v(target_vs, out_v)
                 total_loss = l_pi * 0.02 + l_v
@@ -130,10 +143,9 @@ class NNetWrapper(NeuralNet):
         with torch.no_grad():   #new
             self.nnet.eval()
             pi, v = self.nnet(board, valids is not None)
-        
-        if valids is not None:
-            pi = pi * torch.FloatTensor(valids.astype(np.uint8)).to(pi.device)
-            pi = F.softmax(pi, dim=1)
+            if valids is not None:
+                pi = pi * torch.FloatTensor(valids.astype(np.uint8)).to(pi.device)
+                pi = F.softmax(pi, dim=1)
 
         #print('PREDICTION TIME TAKEN : {0:03f}'.format(time.time()-start))
         return pi.data.cpu().numpy()[0], v.data.cpu().numpy()[0]
