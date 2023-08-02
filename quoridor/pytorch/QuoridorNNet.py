@@ -332,7 +332,7 @@ class QuoridorNNet(nn.Module):
         
         
 
-    def forward(self, s):
+    def forward(self, s, logits=False):
         #                                                           s: batch_size*4 x board_x x board_y
         s = s.view(-1, 4, self.board_x, self.board_y)                # batch_size x 4 x board_x x board_y
         x = self.pos_emb(s) + self.initial_conv(s)
@@ -350,5 +350,13 @@ class QuoridorNNet(nn.Module):
         x = x.squeeze(-1).squeeze(-1)
         pi = self.fc3(x)                                                                         # batch_size x action_size
         v = self.fc4(x)                                                                          # batch_size x 1
-        
-        return F.log_softmax(pi, dim=1), t.tanh(v)
+        assert (pi.isnan() == 0).all()
+        assert (v.isnan() == 0).all()
+        if (pi == 0.0).all():
+            print(pi, v)
+            print("x:", x)
+            print("s:", s)
+            print(self.pos_emb(s) + self.initial_conv(s))
+        if logits:
+            return pi, t.tanh(v)
+        return F.softmax(pi, dim=1), t.tanh(v)
