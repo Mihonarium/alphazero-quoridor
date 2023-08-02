@@ -22,13 +22,14 @@ from torch.autograd import Variable
 from .QuoridorNNet import QuoridorNNet as qnnet
 
 args = dotdict({
-    'lr': 0.001,
+    'lr': 0.002,
     'dropout': 0.3,
-    'epochs': 4,
+    'epochs': 3,
     'batch_size': 64,
     'cuda': torch.cuda.is_available(),
     'num_channels': 256,
     'clip': 1.0,
+    'weight_decay': 1e-4
 })
 
 class NNetWrapper(NeuralNet):
@@ -45,7 +46,7 @@ class NNetWrapper(NeuralNet):
         examples: list of examples, each example is of form (board, pi, v)
         """
         # wandb.init(project="quoridor alphazero", config=config_dict, mode="disabled" if IS_CI else "run")
-        optimizer = optim.Adam(self.nnet.parameters())
+        optimizer = optim.Adam(self.nnet.parameters(), lr=args.lr, weight_decay=args.weight_decay)
         start_time = time.time()
 
         for epoch in range(args.epochs):
@@ -113,7 +114,7 @@ class NNetWrapper(NeuralNet):
             bar.finish()
 
 
-    def predict(self, board):
+    def predict(self, board, valids=None):
         """
         board: np array with board
         """
@@ -128,10 +129,14 @@ class NNetWrapper(NeuralNet):
         board = board.view(4, self.board_x, self.board_y)
         with torch.no_grad():   #new
             self.nnet.eval()
-            pi, v = self.nnet(board)
+            pi, v = self.nnet(board, valids is not None)
+        
+        if valids is not None:
+            pi = pi * torch.FloatTensor(valids.astype(np.uint8)).to(pi.device)
+            pi = F.softmax(pi, dim=1)
 
         #print('PREDICTION TIME TAKEN : {0:03f}'.format(time.time()-start))
-        return torch.exp(pi).data.cpu().numpy()[0], v.data.cpu().numpy()[0]
+        return pi.data.cpu().numpy()[0], v.data.cpu().numpy()[0]
 
     def loss_pi(self, targets, outputs):
         return -torch.sum(targets*outputs)/targets.size()[0]
