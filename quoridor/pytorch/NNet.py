@@ -89,11 +89,15 @@ class NNetWrapper(NeuralNet):
                 # compute output
                 out_pi, out_v = self.nnet(boards, withValids)
                 if withValids:
+                    l_invalid = self.loss_invalid(out_pi, valids)
                     out_pi = out_pi * valids
+                    out_pi[valids == 0.0] = float('-inf')
                     out_pi = F.softmax(out_pi, dim=1)
                 l_pi = self.loss_pi(target_pis, out_pi)
                 l_v = self.loss_v(target_vs, out_v)
                 total_loss = l_pi * 0.02 + l_v
+                if withValids:
+                    total_loss += l_invalid
 
                 # record loss
                 #pi_losses.update(l_pi.data[0], boards.size(0))
@@ -144,17 +148,20 @@ class NNetWrapper(NeuralNet):
             self.nnet.eval()
             pi, v = self.nnet(board, valids is not None)
             if valids is not None:
-                pi = pi * torch.FloatTensor(valids.astype(np.uint8)).to(pi.device)
+                pi[torch.FloatTensor(valids.astype(np.uint8)).to(pi.device).unsqueeze(0) == 0.0] = float('-inf')
                 pi = F.softmax(pi, dim=1)
 
         #print('PREDICTION TIME TAKEN : {0:03f}'.format(time.time()-start))
         return pi.data.cpu().numpy()[0], v.data.cpu().numpy()[0]
 
     def loss_pi(self, targets, outputs):
-        return -torch.sum(targets*outputs)/targets.size()[0]
+        return torch.sum(-targets * torch.log(outputs + 1.0e-8))
 
     def loss_v(self, targets, outputs):
-        return torch.sum((targets-outputs.view(-1))**2)/targets.size()[0]
+        return ((targets-outputs.view(-1))**2).mean()
+    
+    def loss_invalid(self, logits, valids):
+        return ((1-valids) * logits.log()).mean()
 
     def save_checkpoint(self, folder='checkpoint', filename='checkpoint.pth.tar'):
         filepath = os.path.join(folder, filename)
