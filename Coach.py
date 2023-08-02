@@ -103,7 +103,7 @@ class Coach():
                 # save the iteration examples to the history
                 self.trainExamplesHistory.append(iterationTrainExamples)
                 trainStats = [0,0,0]
-                for _,_,res in iterationTrainExamples:
+                for _,_,res, _ in iterationTrainExamples:
                     trainStats[res] += 1
                 print(trainStats)
 
