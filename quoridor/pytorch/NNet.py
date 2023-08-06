@@ -22,14 +22,14 @@ from torch.autograd import Variable
 from .QuoridorNNet import QuoridorNNet as qnnet
 
 args = dotdict({
-    'lr': 0.002,
+    'lr': 0.001,
     'dropout': 0.3,
-    'epochs': 3,
-    'batch_size': 64,
+    'epochs': 20,
+    'batch_size': 128,
     'cuda': torch.cuda.is_available(),
     'num_channels': 256,
     'clip': 1.0,
-    'weight_decay': 1e-4
+    'weight_decay': 2e-5
 })
 
 class NNetWrapper(NeuralNet):
@@ -47,7 +47,7 @@ class NNetWrapper(NeuralNet):
         examples: list of examples, each example is of form (board, pi, v)
         """
         # wandb.init(project="quoridor alphazero", config=config_dict, mode="disabled" if IS_CI else "run")
-        optimizer = optim.Adam(self.nnet.parameters(), lr=args.lr, weight_decay=args.weight_decay)
+        optimizer = optim.AdamW(self.nnet.parameters(), lr=args.lr, weight_decay=args.weight_decay)
         start_time = time.time()
         if len(examples[0]) < 4:
             withValids = False
@@ -89,15 +89,15 @@ class NNetWrapper(NeuralNet):
                 # compute output
                 out_pi, out_v = self.nnet(boards, withValids)
                 if withValids:
-                    l_invalid = self.loss_invalid(out_pi, valids)
+                    #l_invalid = self.loss_invalid(out_pi, valids)
                     out_pi = out_pi * valids
                     out_pi[valids == 0.0] = float('-inf')
                     out_pi = F.softmax(out_pi, dim=1)
                 l_pi = self.loss_pi(target_pis, out_pi)
                 l_v = self.loss_v(target_vs, out_v)
-                total_loss = l_pi * 0.02 + l_v
-                if withValids:
-                    total_loss += l_invalid
+                total_loss = l_pi * 0.2 + l_v
+                #if withValids:
+                    #total_loss += l_invalid
 
                 # record loss
                 #pi_losses.update(l_pi.data[0], boards.size(0))
@@ -155,7 +155,7 @@ class NNetWrapper(NeuralNet):
         return pi.data.cpu().numpy()[0], v.data.cpu().numpy()[0]
 
     def loss_pi(self, targets, outputs):
-        return torch.sum(-targets * torch.log(outputs + 1.0e-8))
+        return (-targets * torch.log(outputs + 1.0e-8)).sum(dim=-1).mean()
 
     def loss_v(self, targets, outputs):
         return ((targets-outputs.view(-1))**2).mean()
