@@ -20,7 +20,7 @@ class GroupNorm(nn.Module):
         self,
         num_groups: int,
         num_channels: int,
-        eps: float = 1e-05,
+        eps: float = 1e-2,
         affine: bool = True,
         device: Optional[Union[t.device, str]] = None,
         dtype: Optional[t.dtype] = None,
@@ -140,7 +140,7 @@ class SelfAttention(nn.Module):
     output_proj: nn.Linear
     attn_dropout: nn.Dropout
     resid_dropout: nn.Dropout
-    def __init__(self, channels: int, num_heads: int = 4):
+    def __init__(self, channels: int, num_heads: int = 4, dropout=0):
         """Self-Attention with two spatial dimensions.
 
         channels: the number of channels. Should be divisible by the number of heads.
@@ -154,6 +154,9 @@ class SelfAttention(nn.Module):
         self.num_heads = num_heads
         self.head_size = head_size
         self.head_size_sqrt = t.tensor(head_size).sqrt()
+        self.dropout = dropout
+        self.attn_dropout = nn.Dropout(dropout)
+        self.resid_dropout = nn.Dropout(dropout)
 
     def split_into_heads(self, x: t.Tensor) -> t.Tensor:
         return rearrange(x, "batch seq (head head_size) -> batch head seq head_size", 
@@ -181,18 +184,19 @@ class SelfAttention(nn.Module):
         Q, K, V = t.split(qkv, dim=-1, split_size_or_sections = self.num_heads * self.head_size)
         attn = self.attention_pattern_pre_softmax(Q, K)
         attn = t.softmax(attn, dim=-1)
+        attn = self.attn_dropout(attn)
         V = self.split_into_heads(V)
         #combined_values = t.einsum("bhks, bhqk -> bhqs", V, attn) # attn @ V
         combined_values = attn @ V
-        return rearrange(self.output_proj(rearrange(combined_values, 
-                    "batch heads seq head_size -> batch seq (heads head_size)")),
+        return rearrange(self.output_proj(self.resid_dropout(rearrange(combined_values, 
+                    "batch heads seq head_size -> batch seq (heads head_size)"))),
                          "batch (h w) ch -> batch ch h w", h=H, w=W)
 
 class AttentionBlock(nn.Module):
-    def __init__(self, channels: int, num_heads: int = 4):
+    def __init__(self, channels: int, num_heads: int = 4, dropout=0):
         super().__init__()
         self.group_norm = GroupNorm(1, channels)
-        self.attention = SelfAttention(channels, num_heads)
+        self.attention = SelfAttention(channels, num_heads, dropout)
 
     def forward(self, x: t.Tensor) -> t.Tensor:
         y = self.group_norm(x)
@@ -200,19 +204,20 @@ class AttentionBlock(nn.Module):
         return x + y
     
 class AttnWithLinearBlock(nn.Module):
-    def __init__(self, channels: int, num_heads: int = 4):
+    def __init__(self, channels: int, num_heads: int = 4, dropout=0):
         super().__init__()
-        self.attn_block = AttentionBlock(channels, num_heads)
+        self.attn_block = AttentionBlock(channels, num_heads, dropout)
         self.linear1 = nn.Linear(channels, channels)
         self.silu = SiLU()
         self.linear2 = nn.Linear(channels, channels)
+        self.resid_dropout = nn.Dropout(dropout)
 
     def forward(self, x: t.Tensor) -> t.Tensor:
         y = self.attn_block(x).transpose(-3, -1)
         y = self.linear1(y)
         y = self.silu(y)
         y = self.linear2(y).transpose(-1, -3)
-        return x + y
+        return x + self.resid_dropout(y)
 
 class ConvBlock(nn.Module):
     def __init__(self, input_channels: int, output_channels: int, groups: int):
@@ -266,12 +271,12 @@ class ResidualBlock(nn.Module):
         return x + conv2_result
     
 class DownBlock(nn.Module):
-    def __init__(self, channels_in: int, channels_out: int, time_emb_dim: int, groups: int, downsample: bool):
+    def __init__(self, channels_in: int, channels_out: int, time_emb_dim: int, groups: int, downsample: bool, num_heads: int = 4, dropout: float = 0):
         super().__init__()
         self.downsample = downsample
         self.res_block1 = ResidualBlock(channels_in, channels_out, time_emb_dim, groups)
         self.res_block2 = ResidualBlock(channels_out, channels_out, time_emb_dim, groups)
-        self.attention_block = AttentionBlock(channels_out)
+        self.attention_block = AttentionBlock(channels_out, num_heads, dropout)
         if downsample:
             self.final_conv = nn.Conv2d(channels_out, channels_out, 4, stride=2, padding=1)
 
@@ -302,9 +307,6 @@ class QuoridorNNet(nn.Module):
 
         super(QuoridorNNet, self).__init__()
         
-        
-        ## updated
-        
         # image_shape: tuple[int, int, int],
         #dim_mults = (1, 2, 4, 8)
         dim_mults = (1, 2, 4, 8)
@@ -315,16 +317,20 @@ class QuoridorNNet(nn.Module):
         self.pos_emb = SinusoidalPositionEmbeddings2D(args.num_channels, 4, self.board_x, self.board_y)
         channels = args.num_channels
         self.initial_conv = nn.Conv2d(4, channels, 7, padding=3)
-        attn_blocks = 4
+        attn_blocks = 6
         self.attn_blocks = nn.ModuleList([
-            AttnWithLinearBlock(channels, num_heads) for i in range(attn_blocks)
+            AttnWithLinearBlock(channels, num_heads, args.dropout) for i in range(attn_blocks)
         ])
         previous_dim_mults = [1] + list(dim_mults)
         self.down_blocks = nn.ModuleList([
-            DownBlock(previous_dim_mults[i] * channels, dim_mult * channels, time_emb_dim, groups, i != len(dim_mults)-1) for i, dim_mult in enumerate(dim_mults)
+            DownBlock(previous_dim_mults[i] * channels, dim_mult * channels, time_emb_dim, groups, i != len(dim_mults)-1, num_heads, args.dropout) for i, dim_mult in enumerate(dim_mults)
             # DownBlock(previous_dim_mults[i] * channels, dim_mult * channels, time_emb_dim, groups, True) for i, dim_mult in enumerate(dim_mults)
         ])
         # self.final_conv = nn.Conv2d(dim_mults[-1] * channels, channels * 8, 4, stride=2, padding=1)
+        num_linear_layers = 4
+        self.linear_layers = nn.ModuleList([
+            module for i in range(num_linear_layers) for module in (nn.Linear(channels * dim_mults[-1], channels * dim_mults[-1]), nn.Dropout(args.dropout), nn.ReLU())
+        ])
         
         self.fc3 = nn.Linear(channels * dim_mults[-1], self.action_size)
 
@@ -344,10 +350,10 @@ class QuoridorNNet(nn.Module):
         # skips = []
         for block in self.down_blocks:
             x, _ = block(x, time_emb)
-            # print(x.shape)
-            # skips += [skip]
         # x = self.final_conv(x)
         x = x.squeeze(-1).squeeze(-1)
+        for l in self.linear_layers:
+            x = l(x)
         pi = self.fc3(x)                                                                         # batch_size x action_size
         v = self.fc4(x)                                                                          # batch_size x 1
         assert (pi.isnan() == 0).all()
