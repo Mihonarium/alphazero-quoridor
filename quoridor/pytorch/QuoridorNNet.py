@@ -14,54 +14,17 @@ from typing import Optional, Union
 from einops import rearrange, repeat
 from fancy_einsum import einsum
 import math
+import numpy as np
 
-class GroupNorm(nn.Module):
-    def __init__(
-        self,
-        num_groups: int,
-        num_channels: int,
-        eps: float = 1e-2,
-        affine: bool = True,
-        device: Optional[Union[t.device, str]] = None,
-        dtype: Optional[t.dtype] = None,
-    ) -> None:
-        super().__init__()
-        assert num_channels % num_groups == 0
-        self.device = device
-        self.dtype = dtype
-        self.affine = affine
-        self.eps = eps
-        self.num_groups = num_groups
-        self.num_channels = num_channels
-        if affine:
-            self.weight = nn.Parameter(t.empty(num_channels, 
-                              dtype=dtype, device=device))
-            self.bias = nn.Parameter(t.empty(num_channels, 
-                              dtype=dtype, device=device))
-        self.reset_parameters()
+def layer_init(layer: nn.Linear, row_norm=np.sqrt(2), bias_const=0.0) -> nn.Linear:
+    """Initialize the provided linear layer.
 
-    def reset_parameters(self) -> None:
-        """Initialize the weight and bias, if applicable."""
-        if self.affine:
-            nn.init.ones_(self.weight)
-            nn.init.zeros_(self.bias)
-
-    def forward(self, x: t.Tensor) -> t.Tensor:
-        """Apply normalization to each group of channels.
-
-        x: shape (batch, channels, height, width)
-        out: shape (batch, channels, height, width)
-        """
-        x = rearrange(x, "b (g c) h w -> b g c h w", g=self.num_groups)
-        var = x.var(dim=(2,3,4), keepdim=True, correction=0)
-        mean = x.mean(dim=(2,3,4), keepdim=True)
-        x = (x - mean) / (var + self.eps).sqrt()
-        x = rearrange(x, "b g c h w -> b (g c) h w", g=self.num_groups)
-        if self.affine:
-            x = rearrange(x, "b c h w -> b h w c")
-            x = rearrange(x * self.weight + self.bias, "b h w c -> b c h w")
-        
-        return x
+    - Each row of the weight has the specified norm
+    - Each element of the bias is bias_const.
+    """
+    t.nn.init.orthogonal_(layer.weight, row_norm)
+    t.nn.init.constant_(layer.bias, bias_const)
+    return layer
 
 class SinusoidalPositionEmbeddings(nn.Module):
     def __init__(self, embedding_size: int):
@@ -195,7 +158,7 @@ class SelfAttention(nn.Module):
 class AttentionBlock(nn.Module):
     def __init__(self, channels: int, num_heads: int = 4, dropout=0):
         super().__init__()
-        self.group_norm = GroupNorm(1, channels)
+        self.group_norm = nn.GroupNorm(1, channels)
         self.attention = SelfAttention(channels, num_heads, dropout)
 
     def forward(self, x: t.Tensor) -> t.Tensor:
@@ -207,9 +170,10 @@ class AttnWithLinearBlock(nn.Module):
     def __init__(self, channels: int, num_heads: int = 4, dropout=0):
         super().__init__()
         self.attn_block = AttentionBlock(channels, num_heads, dropout)
-        self.linear1 = nn.Linear(channels, channels)
+        self.linear1 = layer_init(nn.Linear(channels, channels))
         self.silu = SiLU()
-        self.linear2 = nn.Linear(channels, channels)
+        self.linear2 = layer_init(nn.Linear(channels, channels))
+        self.batchnorm = nn.BatchNorm2d(channels)
         self.resid_dropout = nn.Dropout(dropout)
 
     def forward(self, x: t.Tensor) -> t.Tensor:
@@ -217,6 +181,7 @@ class AttnWithLinearBlock(nn.Module):
         y = self.linear1(y)
         y = self.silu(y)
         y = self.linear2(y).transpose(-1, -3)
+        y = self.batchnorm(y)
         return x + self.resid_dropout(y)
 
 class ConvBlock(nn.Module):
@@ -224,7 +189,7 @@ class ConvBlock(nn.Module):
         super().__init__()
         self.conv_block = nn.Sequential(
             nn.Conv2d(input_channels, output_channels, 3, padding=1),
-            GroupNorm(groups, output_channels),
+            nn.GroupNorm(groups, output_channels),
             SiLU()
         )
     
@@ -253,7 +218,7 @@ class ResidualBlock(nn.Module):
         
         self.embed_processing = nn.Sequential(
             SiLU(),
-            nn.Linear(step_dim, output_channels)
+            layer_init(nn.Linear(step_dim, output_channels))
         )
         
         self.conv2 = ConvBlock(output_channels, output_channels, groups)
@@ -310,14 +275,14 @@ class QuoridorNNet(nn.Module):
         # image_shape: tuple[int, int, int],
         #dim_mults = (1, 2, 4, 8)
         dim_mults = (1, 2, 4, 8)
-        groups = 4        
+        groups = 1        
         time_emb_dim = 4
-        num_heads = 4
+        num_heads = 8
         self.time_embedding = t.zeros(time_emb_dim)
         self.pos_emb = SinusoidalPositionEmbeddings2D(args.num_channels, 4, self.board_x, self.board_y)
         channels = args.num_channels
         self.initial_conv = nn.Conv2d(4, channels, 7, padding=3)
-        attn_blocks = 6
+        attn_blocks = 2
         self.attn_blocks = nn.ModuleList([
             AttnWithLinearBlock(channels, num_heads, args.dropout) for i in range(attn_blocks)
         ])
@@ -327,14 +292,14 @@ class QuoridorNNet(nn.Module):
             # DownBlock(previous_dim_mults[i] * channels, dim_mult * channels, time_emb_dim, groups, True) for i, dim_mult in enumerate(dim_mults)
         ])
         # self.final_conv = nn.Conv2d(dim_mults[-1] * channels, channels * 8, 4, stride=2, padding=1)
-        num_linear_layers = 4
-        self.linear_layers = nn.ModuleList([
-            module for i in range(num_linear_layers) for module in (nn.Linear(channels * dim_mults[-1], channels * dim_mults[-1]), nn.Dropout(args.dropout), nn.ReLU())
-        ])
-        
-        self.fc3 = nn.Linear(channels * dim_mults[-1], self.action_size)
-
-        self.fc4 = nn.Linear(channels * dim_mults[-1], 1)
+        num_policy_head_layers = 2
+        self.policy_head = nn.ModuleList([
+            module for i in range(num_policy_head_layers-1) for module in (layer_init(nn.Linear(channels * dim_mults[-1], channels * dim_mults[-1])), nn.Dropout(args.dropout), nn.Tanh())
+        ] + [layer_init(nn.Linear(channels * dim_mults[-1], self.action_size), row_norm=0.01)])
+        num_value_head_layers = 2
+        self.value_head = nn.ModuleList([
+            module for i in range(num_value_head_layers-1) for module in (layer_init(nn.Linear(channels * dim_mults[-1], channels * dim_mults[-1])), nn.Dropout(args.dropout), nn.Tanh())
+        ] + [layer_init(nn.Linear(channels * dim_mults[-1], 1))])
         
         
 
@@ -352,10 +317,13 @@ class QuoridorNNet(nn.Module):
             x, _ = block(x, time_emb)
         # x = self.final_conv(x)
         x = x.squeeze(-1).squeeze(-1)
-        for l in self.linear_layers:
-            x = l(x)
-        pi = self.fc3(x)                                                                         # batch_size x action_size
-        v = self.fc4(x)                                                                          # batch_size x 1
+        pi = x
+        v = x
+        for policy_layer in self.policy_head: # batch_size x action_size
+            pi = policy_layer(pi)
+        for value_layer in self.value_head: # batch_size x 1
+            v = value_layer(v)
+        
         assert (pi.isnan() == 0).all()
         assert (v.isnan() == 0).all()
         if (pi == 0.0).all():
