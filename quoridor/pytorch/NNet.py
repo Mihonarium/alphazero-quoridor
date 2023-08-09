@@ -22,14 +22,14 @@ from torch.autograd import Variable
 from .QuoridorNNet import QuoridorNNet as qnnet
 
 args = dotdict({
-    'lr': 0.001,
+    'lr': 0.00025,
     'dropout': 0.3,
-    'epochs': 20,
-    'batch_size': 128,
+    'epochs': 4,
+    'batch_size': 64,
     'cuda': torch.cuda.is_available(),
     'num_channels': 256,
     'clip': 1.0,
-    'weight_decay': 2e-5
+    'weight_decay': 1e-5
 })
 
 class NNetWrapper(NeuralNet):
