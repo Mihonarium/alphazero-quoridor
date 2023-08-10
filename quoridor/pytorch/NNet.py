@@ -24,7 +24,7 @@ from .QuoridorNNet import QuoridorNNet as qnnet
 args = dotdict({
     'lr': 0.00025,
     'dropout': 0.3,
-    'epochs': 4,
+    'epochs': 8,
     'batch_size': 64,
     'cuda': torch.cuda.is_available(),
     'num_channels': 256,
@@ -49,6 +49,8 @@ class NNetWrapper(NeuralNet):
         # wandb.init(project="quoridor alphazero", config=config_dict, mode="disabled" if IS_CI else "run")
         optimizer = optim.AdamW(self.nnet.parameters(), lr=args.lr, weight_decay=args.weight_decay)
         start_time = time.time()
+        if len(examples) == 0:
+            print("no training exampels")
         if len(examples[0]) < 4:
             withValids = False
 
@@ -95,7 +97,7 @@ class NNetWrapper(NeuralNet):
                     out_pi = F.softmax(out_pi, dim=1)
                 l_pi = self.loss_pi(target_pis, out_pi)
                 l_v = self.loss_v(target_vs, out_v)
-                total_loss = l_pi * 0.2 + l_v
+                total_loss = l_pi + l_v
                 #if withValids:
                     #total_loss += l_invalid
 
