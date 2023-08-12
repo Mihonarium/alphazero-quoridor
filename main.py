@@ -6,7 +6,7 @@ from utils import *
 args = dotdict({
     'numIters': 500, #1000
     'numEps': 50, #100
-    'tempThreshold': 0.3,
+    'tempThreshold': 80,
     'updateThreshold': 0.55,
     'maxlenOfQueue': 200000,
     'numMCTSSims': 300,
