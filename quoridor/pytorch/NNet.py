@@ -8,7 +8,7 @@ import math
 import sys
 sys.path.append('../../')
 from utils import *
-from pytorch_classification.utils import Bar, AverageMeter
+from progress.bar import Bar
 from NeuralNet import NeuralNet
 
 import argparse
@@ -24,7 +24,7 @@ from .QuoridorNNet import QuoridorNNet as qnnet
 args = dotdict({
     'lr': 0.00025,
     'dropout': 0.3,
-    'epochs': 8,
+    'epochs': 4,
     'batch_size': 64,
     'cuda': torch.cuda.is_available(),
     'num_channels': 256,
@@ -69,7 +69,8 @@ class NNetWrapper(NeuralNet):
             while batch_idx < int(len(examples)/args.batch_size):
                 sample_ids = np.random.randint(len(examples), size=args.batch_size)
                 if withValids:
-                    boards, pis, vs, valids = list(zip(*[examples[i] for i in sample_ids]))
+                    res = list(zip(*[examples[i] for i in sample_ids]))
+                    boards, pis, vs, valids = res[0], res[1], res[2], res[3]
                 else:
                     boards, pis, vs = list(zip(*[examples[i] for i in sample_ids]))
                 boards = torch.FloatTensor(np.array(boards).astype(np.uint8))
@@ -185,3 +186,22 @@ class NNetWrapper(NeuralNet):
         self.nnet = self.nnet.to('cpu')
         self.nnet.load_state_dict(checkpoint['state_dict'])
         self.nnet.cuda()
+
+class AverageMeter(object):
+    """Computes and stores the average and current value
+       Imported from https://github.com/pytorch/examples/blob/master/imagenet/main.py#L247-L262
+    """
+    def __init__(self):
+        self.reset()
+
+    def reset(self):
+        self.val = 0
+        self.avg = 0
+        self.sum = 0
+        self.count = 0
+
+    def update(self, val, n=1):
+        self.val = val
+        self.sum += val * n
+        self.count += n
+        self.avg = self.sum / self.count
