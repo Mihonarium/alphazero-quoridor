@@ -1,5 +1,6 @@
 import numpy as np
-from pytorch_classification.utils import Bar, AverageMeter
+from progress.bar import Bar
+from quoridor.pytorch.NNet import AverageMeter
 import time
 #import os
 
@@ -51,13 +52,14 @@ class Arena():
             action = players[curPlayer+1](self.game.getCanonicalForm(board, curPlayer))
             valids = self.game.getValidMoves(self.game.getCanonicalForm(board, curPlayer),1)
             if valids[action]==0:
+                print("invalid action", action)
                 return -curPlayer
                 #print ""
                 #print(action)
                 #return 0
                 assert valids[action] >0
             #if verbose:
-                #print("Action index ", str(action))
+            #    print("Action index ", str(action))
             board, curPlayer = self.game.getNextState(board, curPlayer, action)
             if verbose and players[curPlayer+1].__name__ == '<lambda>': # new
                 #os.system('clear')
@@ -70,6 +72,7 @@ class Arena():
                 self.display(self.game.getCanonicalForm(board, -curPlayer), -curPlayer)
             else:
                 self.display(self.game.getCanonicalForm(board, curPlayer), curPlayer)
+                # self.display(self.game.getCanonicalForm(board, -curPlayer), -curPlayer)
             #self.display(board)
 
         return self.game.getGameEnded(board, 1)
@@ -131,3 +134,22 @@ class Arena():
         bar.finish()
 
         return oneWon, twoWon, draws
+
+class AverageMeter(object):
+    """Computes and stores the average and current value
+       Imported from https://github.com/pytorch/examples/blob/master/imagenet/main.py#L247-L262
+    """
+    def __init__(self):
+        self.reset()
+
+    def reset(self):
+        self.val = 0
+        self.avg = 0
+        self.sum = 0
+        self.count = 0
+
+    def update(self, val, n=1):
+        self.val = val
+        self.sum += val * n
+        self.count += n
+        self.avg = self.sum / self.count
