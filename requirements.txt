@@ -265,3 +265,4 @@ y-py==0.5.9
 yarl==1.9.2
 ypy-websocket==0.8.2
 zipp==3.16.2
+progress==1.6
