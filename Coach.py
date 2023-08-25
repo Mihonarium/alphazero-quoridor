@@ -2,7 +2,8 @@ from collections import deque
 from Arena import Arena
 from MCTS import MCTS
 import numpy as np
-from pytorch_classification.utils import Bar, AverageMeter
+from progress.bar import Bar
+from quoridor.pytorch.NNet import AverageMeter
 import time, os, sys
 from pickle import Pickler, Unpickler
 from random import shuffle
@@ -58,14 +59,15 @@ class Coach():
             #self.game.print_board(canonicalBoard)
 
             action = np.random.choice(len(pi), p=pi)
-            trainExamples.append([canonicalBoard, self.curPlayer, pi, None, valids])
+            trainExamples.append([canonicalBoard, self.curPlayer, pi, None, valids, episodeStep])
             board, self.curPlayer = self.game.getNextState(board, self.curPlayer, action)
 
             r = self.game.getGameEnded(board, self.curPlayer)
 
             if r!=0:
-                return [(x[0],x[2],r*x[1], x[4]) for x in trainExamples]
+                return [(x[0],x[2],r*x[1], x[4], x[5], episodeStep) for x in trainExamples]
         #return [(x[0],x[2],0) for x in trainExamples]
+        print("the game's not ended")
         return []
 
     def learn(self):
@@ -103,10 +105,9 @@ class Coach():
                 # save the iteration examples to the history
                 self.trainExamplesHistory.append(iterationTrainExamples)
                 trainStats = [0,0,0]
-                for _,_,res, _ in iterationTrainExamples:
-                    trainStats[res] += 1
+                for res in iterationTrainExamples:
+                    trainStats[res[2]] += 1
                 print(trainStats)
-
             if len(self.trainExamplesHistory) > self.args.numItersForTrainExamplesHistory:
                 print("len(trainExamplesHistory) =", len(self.trainExamplesHistory), " => remove the oldest trainExamples")
                 self.trainExamplesHistory.pop(0)
@@ -119,12 +120,12 @@ class Coach():
             for e in self.trainExamplesHistory:
                 trainExamples.extend(e)
             shuffle(trainExamples)
-
+            
             # training new network, keeping a copy of the old one
             self.nnet.save_checkpoint(folder=self.args.checkpoint, filename='temp.pth.tar')
             self.pnet.load_checkpoint(folder=self.args.checkpoint, filename='temp.pth.tar')
             pmcts = MCTS(self.game, self.pnet, self.args)
-
+            
             self.nnet.train(trainExamples)
             nmcts = MCTS(self.game, self.nnet, self.args)
 
