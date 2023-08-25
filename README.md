@@ -8,7 +8,7 @@ To start training, modify parameters in `main.py` and then start using
 python main.py
 ```
 
-A checkpoint after >6k games of self-play is available [here](https://huggingface.co/mishasamin/alphazero-quoridor/blob/main/checkpoint_126.pth.tar); examples of games against it are available [here](https://github.com/Mihonarium/alphazero-quoridor/wiki/Game-examples).
+A checkpoint after >6k games of self-play is available [here](https://huggingface.co/mishasamin/alphazero-quoridor/blob/main/checkpoint_164.pth.tar); examples of games against it are available [here](https://github.com/Mihonarium/alphazero-quoridor/wiki/Game-examples).
 
 ### Playing against it
 
